@@ -19,7 +19,7 @@ make
 ./a.out
 ```
 
-The first time, the program loads a sample campus (10 zones, 16 trees, 3 volunteers). After that, it loads whatever was saved in the `data/` folder.
+The first time, the program starts with an empty campus. Add zones (option 8), paths (option 9), volunteers (option 12) and then plant trees (option 2). Everything is saved in the `data/` folder and loaded back the next time.
 
 ## SETUP START (LINUX)
 ```sh
@@ -62,7 +62,7 @@ data/             saved data (created when the program exits)
 | `heap.c` | Min heap to find the most urgent tree, background timer thread (pthreads) that dries the trees |
 | `graph.c` | Campus graph (adjacency list), Dijkstra, route planning |
 | `volunteer.c` | Volunteer list and leaderboard |
-| `fileio.c` | Saving and loading CSV files, sample data |
+| `fileio.c` | Saving and loading CSV files |
 | `ui.c` | Dashboard with colours, input functions (declared in `treekeeper.h`) |
 | `main.c` | Menu |
 
@@ -103,7 +103,7 @@ Lines that cannot be read (wrong format, zone that does not exist, water outside
 
 ## Testing
 
-`make test` runs `Tests/test.c` (40 test cases). It covers adding species, the timer update (including a wilted assigned tree going back to the queue), inserting, searching and deleting in the hash map (including rehashing and duplicate IDs), heap insert/update/remove/extract order, Dijkstra on a small graph (including an unreachable zone and a removed path), and saving data and loading it back.
+`make test` runs `Tests/test.c` (40 test cases). It covers adding species, the timer update (including a wilted assigned tree going back to the queue), inserting, searching and deleting in the hash map (including rehashing and duplicate IDs), heap insert/update/remove/extract order, Dijkstra on a small graph (including an unreachable zone and a removed path), and saving data and loading it back. The sample campus (10 zones, 16 trees, 3 volunteers) used for this is inside `test.c`, so it is only loaded by `make test`.
 
 `./a.out < Tests/test_input.txt` runs a full session from the menu. It includes wrong inputs such as an unknown species, an unknown zone, a missing tree ID and text instead of a number.
 
