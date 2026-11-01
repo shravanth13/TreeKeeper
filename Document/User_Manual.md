@@ -4,7 +4,7 @@
 
 Run `make` once, then `./a.out`. The dashboard is shown first, followed by the menu. Type the number of an option and press Enter.
 
-The first time the campus is empty. Add a few zones (8), connect them with paths (9), add volunteers (12) and then plant trees (2).
+The first time the campus is empty. Add a few zones (8), connect them with paths (9), add volunteers (12) and then plant trees (2). To start with a sample campus instead, run `make test` once before `./a.out`.
 
 ## Dashboard (option 1)
 
