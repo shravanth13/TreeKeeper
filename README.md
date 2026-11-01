@@ -21,6 +21,8 @@ make
 
 The first time, the program starts with an empty campus. Add zones (option 8), paths (option 9), volunteers (option 12) and then plant trees (option 2). Everything is saved in the `data/` folder and loaded back the next time.
 
+To try it with a ready campus, run `make test` first. Along with the tests it saves a sample campus (10 zones, 16 trees, 3 volunteers) in `data/`, which `./a.out` then loads. If `data/` already has saved data it is not touched.
+
 ## SETUP START (LINUX)
 ```sh
 ls -la
@@ -103,7 +105,7 @@ Lines that cannot be read (wrong format, zone that does not exist, water outside
 
 ## Testing
 
-`make test` runs `Tests/test.c` (40 test cases). It covers adding species, the timer update (including a wilted assigned tree going back to the queue), inserting, searching and deleting in the hash map (including rehashing and duplicate IDs), heap insert/update/remove/extract order, Dijkstra on a small graph (including an unreachable zone and a removed path), and saving data and loading it back. The sample campus (10 zones, 16 trees, 3 volunteers) used for this is inside `test.c`, so it is only loaded by `make test`.
+`make test` runs `Tests/test.c` (40 test cases). It covers adding species, the timer update (including a wilted assigned tree going back to the queue), inserting, searching and deleting in the hash map (including rehashing and duplicate IDs), heap insert/update/remove/extract order, Dijkstra on a small graph (including an unreachable zone and a removed path), and saving data and loading it back. The sample campus used for this is inside `test.c`, so it only exists after `make test`.
 
 `./a.out < Tests/test_input.txt` runs a full session from the menu. It includes wrong inputs such as an unknown species, an unknown zone, a missing tree ID and text instead of a number.
 

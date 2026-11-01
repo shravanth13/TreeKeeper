@@ -223,8 +223,33 @@ void testFiles(void)
     pthread_mutex_destroy(&b.lock);
 }
 
+// make test also puts the sample campus in data/ so ./a.out has something to show.
+// it is skipped if data/ already has saved data, so nothing is overwritten
+void addSampleData(void)
+{
+    FILE *f = fopen("data/zones.csv", "r");
+    if (f != NULL) {
+        fclose(f);
+        printf("data/ already has saved data, sample campus not added.\n");
+        return;
+    }
+
+    System sys = {0};
+    sys.trees = createHashMap(16); sys.heap = createHeap(16); sys.map = createGraph(8); sys.vols = createVolunteerList(4);
+    sys.nextTreeId = 1001; sys.nextVolunteerId = 1; sys.speed = 0.05;
+    pthread_mutex_init(&sys.lock, NULL);
+
+    loadSampleData(&sys);
+    if (saveData(&sys, "data"))
+        printf("Sample campus (10 zones, 16 trees, 3 volunteers) saved in data/.\n");
+
+    freeHeap(sys.heap); freeHashMap(sys.trees); freeGraph(sys.map); freeVolunteerList(sys.vols);
+    pthread_mutex_destroy(&sys.lock);
+}
+
 int main(void)
 {
+    addSampleData();   // before testSpecies, so the test species are not saved with it
     testSpecies();
     testHashMap();
     testHeap();
