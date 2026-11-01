@@ -124,6 +124,29 @@ void testGraph(void)
     freeGraph(g);
 }
 
+void testTimer(void)
+{
+    printf("\nTimer tests:\n");
+    System sys = {0};
+    sys.trees = createHashMap(8); sys.heap = createHeap(4); sys.vols = createVolunteerList(2);
+
+    Tree *a = createTree(1, "Neem", 0, 60);     // 1.2 per hour
+    Tree *b = createTree(2, "Bamboo", 0, 90);   // 2.8 per hour
+    Tree *c = createTree(3, "Teak", 0, 5);      // assigned, so not in the heap
+    c->assignedTo = 7;
+    hashInsert(sys.trees, a); heapInsert(sys.heap, a);
+    hashInsert(sys.trees, b); heapInsert(sys.heap, b);
+    hashInsert(sys.trees, c);
+
+    simulateHours(&sys, 10);
+    check(a->water == 48 && b->water == 62, "water goes down by dryRate x hours");
+    check(c->water == 0 && c->assignedTo == -1 && c->heapIndex != -1, "wilted assigned tree back in queue");
+    check(heapPeek(sys.heap) == c, "heap rebuilt after update");
+    check(sys.simHours == 10, "time moved forward");
+
+    freeHeap(sys.heap); freeHashMap(sys.trees); freeVolunteerList(sys.vols);
+}
+
 void testFiles(void)
 {
     printf("\nSave / load tests:\n");
@@ -170,6 +193,7 @@ int main(void)
     testHashMap();
     testHeap();
     testGraph();
+    testTimer();
     testFiles();
     printf("\n%d passed, %d failed\n", passed, failed);
     return failed > 0;

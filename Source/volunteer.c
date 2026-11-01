@@ -5,13 +5,9 @@
 
 VolunteerList *createVolunteerList(int capacity)
 {
-    if (capacity < 1)
-        capacity = 1;
-
     VolunteerList *vl = malloc(sizeof(VolunteerList));
     if (vl == NULL)
         return NULL;
-
     vl->list = malloc(capacity * sizeof(Volunteer));
     if (vl->list == NULL) {
         free(vl);
@@ -22,12 +18,10 @@ VolunteerList *createVolunteerList(int capacity)
     return vl;
 }
 
-// returns 1 on success, 0 on error (bad name, duplicate id, no memory)
+// returns 0 for a bad name, a duplicate id or no memory
 int addVolunteer(VolunteerList *vl, int id, const char *name, int zone, int tasksDone)
 {
-    if (vl == NULL || name == NULL || strlen(name) == 0 || strlen(name) >= NAME_LEN)
-        return 0;
-    if (findVolunteer(vl, id) != NULL)
+    if (strlen(name) == 0 || strlen(name) >= NAME_LEN || findVolunteer(vl, id) != NULL)
         return 0;
 
     if (vl->count == vl->capacity) {
@@ -56,7 +50,7 @@ Volunteer *findVolunteer(VolunteerList *vl, int id)
     return NULL;
 }
 
-// prints volunteers sorted by tasks done (simple selection sort on a copy)
+// sorted by trees watered, selection sort on a copy so ids stay in order in the list
 void printLeaderboard(VolunteerList *vl)
 {
     if (vl->count == 0) {
@@ -64,10 +58,9 @@ void printLeaderboard(VolunteerList *vl)
         return;
     }
 
-    Volunteer *copy = malloc(vl->count * sizeof(Volunteer));
-    if (copy == NULL)
-        return;
-    memcpy(copy, vl->list, vl->count * sizeof(Volunteer));
+    Volunteer copy[vl->count];
+    for (int i = 0; i < vl->count; i++)
+        copy[i] = vl->list[i];
 
     for (int i = 0; i < vl->count - 1; i++) {
         int max = i;
@@ -82,7 +75,6 @@ void printLeaderboard(VolunteerList *vl)
 
     for (int i = 0; i < vl->count; i++)
         printf("  %d. %-15s (id %d)  %d tree(s) watered\n", i + 1, copy[i].name, copy[i].id, copy[i].tasksDone);
-    free(copy);
 }
 
 void freeVolunteerList(VolunteerList *vl)

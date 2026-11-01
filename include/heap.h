@@ -3,7 +3,7 @@
 
 #include "tree.h"
 
-// min heap of trees, the tree that will dry out first is at the root
+// min heap of trees, the one that dries out first is at the root
 typedef struct {
     Tree **arr;
     int size;
