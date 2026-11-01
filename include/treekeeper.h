@@ -40,7 +40,6 @@ void stopTimer(System *sys);
 // fileio.c
 int saveData(System *sys, const char *folder);
 int loadData(System *sys, const char *folder);
-void loadSampleData(System *sys);
 
 // ui.c
 void clearScreen(void);

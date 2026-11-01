@@ -4,6 +4,8 @@
 
 Run `make` once, then `./a.out`. The dashboard is shown first, followed by the menu. Type the number of an option and press Enter.
 
+The first time the campus is empty. Add a few zones (8), connect them with paths (9), add volunteers (12) and then plant trees (2).
+
 ## Dashboard (option 1)
 
 - Simulated time (Day, hour), speed, and whether the timer is running
@@ -41,4 +43,4 @@ Zones can be entered by their ID (the number shown in option 10 or in the zone l
 
 ## Data
 
-Everything is saved in the `data/` folder as CSV files when you exit (option 0) or choose option 17. To start again with the sample campus, delete the `data/` folder.
+Everything is saved in the `data/` folder as CSV files when you exit (option 0) or choose option 17. To start again with an empty campus, delete the `data/` folder.

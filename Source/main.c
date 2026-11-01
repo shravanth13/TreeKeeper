@@ -402,8 +402,7 @@ int main(void)
     if (loadData(&sys, DATA_FOLDER))
         printf("Loaded saved data from '%s'.\n", DATA_FOLDER);
     else {
-        printf("No saved data found, loading sample campus.\n");
-        loadSampleData(&sys);
+        printf("No saved data found, starting with an empty campus.\n");
     }
 
     startTimer(&sys);

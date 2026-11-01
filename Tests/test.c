@@ -147,6 +147,42 @@ void testTimer(void)
     freeHeap(sys.heap); freeHashMap(sys.trees); freeVolunteerList(sys.vols);
 }
 
+// small campus used only for the save / load tests
+void loadSampleData(System *sys)
+{
+    char *zones[] = {
+        "Main_Gate", "Admin_Block", "Library", "Lecture_Hall_Complex", "Orion",
+        "Octagon", "Hostel_Zone", "Sports_Complex", "Golden_Jubilee", "Pond_Area"
+    };
+    int paths[13][3] = {
+        {0, 1, 450}, {1, 2, 300}, {1, 8, 350}, {2, 3, 250}, {2, 5, 400},
+        {3, 4, 200}, {4, 5, 300}, {5, 6, 600}, {6, 7, 350}, {7, 9, 500},
+        {8, 9, 700}, {8, 3, 550}, {0, 9, 1200}
+    };
+    char *species[] = {
+        "Neem", "Banyan", "Mango", "Bamboo", "Peepal", "Teak", "Gulmohar", "Arjuna",
+        "Neem", "Bamboo", "Mango", "Banyan", "Teak", "Gulmohar", "Peepal", "Arjuna"
+    };
+    int treeZone[] = {0, 1, 2, 2, 3, 4, 5, 6, 6, 7, 8, 9, 9, 0, 7, 1};
+    float water[] = {92, 71, 34, 48, 65, 22, 57, 15, 80, 28, 44, 88, 39, 12, 96, 51};
+
+    for (int i = 0; i < 10; i++)
+        addZone(sys->map, zones[i]);
+    for (int i = 0; i < 13; i++)
+        addPath(sys->map, paths[i][0], paths[i][1], paths[i][2]);
+
+    addVolunteer(sys->vols, sys->nextVolunteerId++, "Shaurya", 6, 0);
+    addVolunteer(sys->vols, sys->nextVolunteerId++, "Shravanth", 2, 0);
+    addVolunteer(sys->vols, sys->nextVolunteerId++, "Shreya", 1, 0);
+
+    for (int i = 0; i < 16; i++) {
+        Tree *t = createTree(sys->nextTreeId, species[i], treeZone[i], water[i]);
+        hashInsert(sys->trees, t);
+        heapInsert(sys->heap, t);
+        sys->nextTreeId++;
+    }
+}
+
 void testFiles(void)
 {
     printf("\nSave / load tests:\n");
