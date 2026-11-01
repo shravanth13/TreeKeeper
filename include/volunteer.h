@@ -6,11 +6,11 @@
 typedef struct {
     int id;
     char name[NAME_LEN];
-    int zone;          // zone where the volunteer starts walking from
-    int tasksDone;     // number of trees watered
+    int zone;          // where the volunteer starts walking from
+    int tasksDone;     // trees watered
 } Volunteer;
 
-// dynamic array of volunteers
+// dynamic array
 typedef struct {
     Volunteer *list;
     int count;

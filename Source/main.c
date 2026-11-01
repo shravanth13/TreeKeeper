@@ -1,23 +1,14 @@
-/*
- * TreeKeeper - Afforestation and Maintenance Scheduling System
- * Team PROTOCOL 0 - CSLR31 Data Structures Lab
- *
- * Data structures used:
- *   Min Heap  - which tree needs water first
- *   Hash Map  - find a tree by its ID in O(1)
- *   Graph     - campus zones and paths, Dijkstra for shortest walk
- *   pthreads  - background timer that reduces water levels
- */
+// TreeKeeper - Team PROTOCOL 0, CSLR31 Data Structures Lab
+// min heap: which tree needs water first, hash map: tree by ID,
+// graph: campus zones with Dijkstra, pthread: timer that dries the trees
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <math.h>
 #include "treekeeper.h"
-#include "ui.h"
 
 #define DATA_FOLDER "data"
 
-// returns 1 if the string has only digits
 static int isNumber(const char *s)
 {
     if (*s == '\0')
@@ -29,45 +20,28 @@ static int isNumber(const char *s)
     return 1;
 }
 
-// short list of zones with their IDs, shown before asking for a zone
-static void printZoneList(System *sys)
+// zone can be typed as its ID or its name. what was typed is left in name
+static int askZone(System *sys, const char *prompt, char *name)
 {
-    printf("Zones:\n");
-    for (int i = 0; i < sys->map->count; i++)
-        printf("  [%d] %s\n", i, sys->map->zones[i].name);
-}
-
-// asks for a zone ID or name and returns its index, or -1 if not found.
-// if name is not NULL, the text the user typed is copied into it
-static int askZoneInput(System *sys, const char *prompt, char *name)
-{
-    char input[NAME_LEN];
-    if (!readString(prompt, input, NAME_LEN)) {
+    if (!readString(prompt, name, NAME_LEN)) {
         printf(RED "Invalid zone.\n" RESET);
+        name[0] = '\0';
         return -1;
     }
-    if (name != NULL)
-        strcpy(name, input);
 
-    if (isNumber(input)) {
-        int id = atoi(input);
-        if (id >= 0 && id < sys->map->count)
-            return id;
-        return -1;
+    int z = -1;
+    if (isNumber(name)) {
+        z = atoi(name);
+        if (z >= sys->map->count)
+            z = -1;
+    } else {
+        z = findZone(sys->map, name);
     }
-    return findZone(sys->map, input);
-}
-
-static int askZone(System *sys, const char *prompt)
-{
-    char input[NAME_LEN] = "";
-    int z = askZoneInput(sys, prompt, input);
-    if (z == -1 && input[0] != '\0')
-        printf(RED "Zone '%s' not found. Use option 10 to see all zones.\n" RESET, input);
+    if (z == -1)
+        printf(RED "Zone '%s' not found. Use option 10 to see all zones.\n" RESET, name);
     return z;
 }
 
-// asks yes/no, returns 1 for yes
 static int askYesNo(const char *prompt)
 {
     char answer[NAME_LEN];
@@ -76,8 +50,7 @@ static int askYesNo(const char *prompt)
     return answer[0] == 'y' || answer[0] == 'Y';
 }
 
-// asks for the dry rate and adds a new species, returns 1 if added
-static int createSpecies(const char *name)
+static int newSpeciesRate(const char *name)
 {
     float rate;
     if (!readFloat("Water lost per hour in % (e.g. 1.5): ", &rate) || rate <= 0 || rate > 100) {
@@ -101,15 +74,15 @@ static Tree *askTree(System *sys)
     }
     pthread_mutex_lock(&sys->lock);
     Tree *t = hashSearch(sys->trees, id);
+    pthread_mutex_unlock(&sys->lock);
     if (t == NULL)
         printf(RED "No tree with ID %d.\n" RESET, id);
-    pthread_mutex_unlock(&sys->lock);
     return t;
 }
 
 static void plantTree(System *sys)
 {
-    char species[NAME_LEN], zoneName[NAME_LEN] = "";
+    char species[NAME_LEN], zoneName[NAME_LEN];
     float water;
 
     printSpeciesList();
@@ -119,21 +92,18 @@ static void plantTree(System *sys)
     }
     if (getDryRate(species) < 0) {
         printf(YELLOW "'%s' is not in the species list.\n" RESET, species);
-        if (!askYesNo("Add it as a new species? (y/n): ") || !createSpecies(species))
+        if (!askYesNo("Add it as a new species? (y/n): ") || !newSpeciesRate(species))
             return;
     }
 
-    printZoneList(sys);
-    int zone = askZoneInput(sys, "Zone (ID or name): ", zoneName);
+    printf("Zones:\n");
+    for (int i = 0; i < sys->map->count; i++)
+        printf("  [%d] %s\n", i, sys->map->zones[i].name);
+
+    int zone = askZone(sys, "Zone (ID or name): ", zoneName);
     if (zone == -1) {
-        if (zoneName[0] == '\0')
-            return;
-        if (isNumber(zoneName)) {
-            printf(RED "There is no zone with ID %s.\n" RESET, zoneName);
-            return;
-        }
-        printf(YELLOW "Zone '%s' does not exist.\n" RESET, zoneName);
-        if (!askYesNo("Add it as a new zone? (y/n): "))
+        // a new name can be added as a zone, a wrong ID cannot
+        if (zoneName[0] == '\0' || isNumber(zoneName) || !askYesNo("Add it as a new zone? (y/n): "))
             return;
         zone = addZone(sys->map, zoneName);
         if (zone == -1) {
@@ -151,10 +121,13 @@ static void plantTree(System *sys)
 
     pthread_mutex_lock(&sys->lock);
     Tree *t = createTree(sys->nextTreeId, species, zone, water);
-    if (t == NULL || !hashInsert(sys->trees, t) || !heapInsert(sys->heap, t)) {
-        hashDelete(sys->trees, sys->nextTreeId);
+    if (t == NULL || !hashInsert(sys->trees, t)) {
         free(t);
-        printf(RED "Could not add the tree (out of memory).\n" RESET);
+        printf(RED "Could not add the tree.\n" RESET);
+    } else if (!heapInsert(sys->heap, t)) {
+        hashDelete(sys->trees, t->id);
+        free(t);
+        printf(RED "Could not add the tree.\n" RESET);
     } else {
         printf(GREEN "Planted %s in %s with ID %d. Print QR code TK-%d for the tree guard.\n" RESET,
                t->species, sys->map->zones[zone].name, t->id, t->id);
@@ -175,10 +148,10 @@ static void newSpecies(void)
         printf(RED "%s is already in the list.\n" RESET, name);
         return;
     }
-    createSpecies(name);
+    newSpeciesRate(name);
 }
 
-// called when a volunteer scans the QR code after watering
+// volunteer scans the QR code (tree ID) after watering
 static void waterTree(System *sys)
 {
     Tree *t = askTree(sys);
@@ -186,10 +159,10 @@ static void waterTree(System *sys)
         return;
 
     pthread_mutex_lock(&sys->lock);
-    if (t->water >= 100.0f) {
+    if (t->water >= 100) {
         printf(YELLOW "Tree %d is already fully watered (100.0%%).\n" RESET, t->id);
     } else {
-        t->water = 100.0f;
+        t->water = 100;
         Volunteer *v = findVolunteer(sys->vols, t->assignedTo);
         if (v != NULL) {
             v->tasksDone++;
@@ -199,15 +172,12 @@ static void waterTree(System *sys)
         }
     }
 
-    // put it back in the queue (or update its position if it was already there)
-    if (t->assignedTo != -1) {
-        t->assignedTo = -1;
+    // task is done, so the tree goes back in the queue with its new priority
+    t->assignedTo = -1;
+    if (t->heapIndex == -1)
         heapInsert(sys->heap, t);
-    } else if (t->heapIndex != -1) {
+    else
         heapUpdate(sys->heap, t);
-    } else {
-        heapInsert(sys->heap, t);
-    }
     pthread_mutex_unlock(&sys->lock);
 }
 
@@ -273,7 +243,7 @@ static void newZone(System *sys)
         printf(RED "Invalid name.\n" RESET);
         return;
     }
-    if (isNumber(name)) {   // numbers are used as zone IDs
+    if (isNumber(name)) {   // numbers are read as zone IDs
         printf(RED "Zone name cannot be only a number.\n" RESET);
         return;
     }
@@ -286,13 +256,14 @@ static void newZone(System *sys)
 
 static void newPath(System *sys)
 {
-    int a = askZone(sys, "From zone (ID or name): ");
+    char name[NAME_LEN];
+    int dist;
+    int a = askZone(sys, "From zone (ID or name): ", name);
     if (a == -1)
         return;
-    int b = askZone(sys, "To zone (ID or name): ");
+    int b = askZone(sys, "To zone (ID or name): ", name);
     if (b == -1)
         return;
-    int dist;
     if (!readInt("Distance in metres: ", &dist) || dist <= 0) {
         printf(RED "Distance must be a positive number.\n" RESET);
         return;
@@ -305,10 +276,11 @@ static void newPath(System *sys)
 
 static void findRoute(System *sys)
 {
-    int a = askZone(sys, "From zone (ID or name): ");
+    char name[NAME_LEN];
+    int a = askZone(sys, "From zone (ID or name): ", name);
     if (a == -1)
         return;
-    int b = askZone(sys, "To zone (ID or name): ");
+    int b = askZone(sys, "To zone (ID or name): ", name);
     if (b == -1)
         return;
     printf("\nShortest path (Dijkstra):\n");
@@ -323,7 +295,8 @@ static void newVolunteer(System *sys)
         printf(RED "Invalid name.\n" RESET);
         return;
     }
-    int zone = askZone(sys, "Starting zone (ID or name): ");
+    char zoneName[NAME_LEN];
+    int zone = askZone(sys, "Starting zone (ID or name): ", zoneName);
     if (zone == -1)
         return;
     if (addVolunteer(sys->vols, sys->nextVolunteerId, name, zone, 0)) {
@@ -334,7 +307,7 @@ static void newVolunteer(System *sys)
     }
 }
 
-// gives the k most urgent trees to a volunteer and plans the walking route
+// gives the k most urgent trees to a volunteer and plans the walk
 static void assignTrees(System *sys)
 {
     int vid, k;
@@ -343,40 +316,33 @@ static void assignTrees(System *sys)
         printf(RED "No volunteer with that ID.\n" RESET);
         return;
     }
-    if (!readInt("How many trees? ", &k) || k <= 0 || k > 10000) {
-        printf(RED "Enter a positive number (up to 10000).\n" RESET);
+    if (!readInt("How many trees? ", &k) || k <= 0) {
+        printf(RED "Enter a positive number.\n" RESET);
         return;
     }
 
     pthread_mutex_lock(&sys->lock);
     Volunteer *v = findVolunteer(sys->vols, vid);
-    if (v == NULL) {
-        pthread_mutex_unlock(&sys->lock);
-        return;
-    }
-    int maxTrees = k < sys->heap->size ? k : sys->heap->size;
-    int *stops = malloc((maxTrees > 0 ? maxTrees : 1) * sizeof(int));
-    int count = 0;
+    if (k > sys->heap->size)
+        k = sys->heap->size;
 
-    if (stops != NULL) {
+    if (k == 0) {
+        printf("  No trees are waiting.\n");
+    } else {
+        int stops[k];
         printf("\nTrees assigned to %s:\n", v->name);
         printTableHeader();
-        while (count < k && sys->heap->size > 0) {
-            Tree *t = extractMin(sys->heap);   // most urgent tree
+        for (int i = 0; i < k; i++) {
+            Tree *t = extractMin(sys->heap);
             t->assignedTo = vid;
-            stops[count++] = t->zone;
+            stops[i] = t->zone;
             printTreeRow(sys, t);
         }
 
-        if (count == 0) {
-            printf("  No trees are waiting.\n");
-        } else {
-            printf("\nSuggested walking route:\n");
-            int total = planRoute(sys->map, v->zone, stops, count);
-            if (total >= 0)
-                printf("  Total walk: %d m\n", total);
-        }
-        free(stops);
+        printf("\nSuggested walking route:\n");
+        int total = planRoute(sys->map, v->zone, stops, k);
+        if (total >= 0)
+            printf("  Total walk: %d m\n", total);
     }
     pthread_mutex_unlock(&sys->lock);
 }
@@ -384,7 +350,7 @@ static void assignTrees(System *sys)
 static void changeSpeed(System *sys)
 {
     float speed;
-    if (!readFloat("Simulated hours per real second: ", &speed) || speed <= 0 || speed > 24 || isnan(speed) || isinf(speed)) {
+    if (!readFloat("Simulated hours per real second: ", &speed) || speed <= 0 || speed > 24) {
         printf(RED "Speed must be between 0 and 24.\n" RESET);
         return;
     }
@@ -419,7 +385,7 @@ int main(void)
     sys.nextTreeId = 1001;
     sys.nextVolunteerId = 1;
     sys.simHours = 0;
-    sys.speed = 0.05f;
+    sys.speed = 0.05;
     sys.paused = 0;
     sys.running = 0;
 
@@ -449,7 +415,7 @@ int main(void)
         printMenu();
         if (!readInt("Enter choice: ", &choice)) {
             if (feof(stdin))
-                break;   // input ended (Ctrl+D or end of a test file)
+                break;   // Ctrl+D or end of an input file
             printf(RED "Please enter a number.\n" RESET);
             continue;
         }
@@ -490,7 +456,7 @@ int main(void)
     if (saveData(&sys, DATA_FOLDER))
         printf("Data saved to '%s'. Bye!\n", DATA_FOLDER);
 
-    // free everything (the hash map also frees the trees)
+    // the hash map also frees the trees
     freeHeap(sys.heap);
     freeHashMap(sys.trees);
     freeGraph(sys.map);

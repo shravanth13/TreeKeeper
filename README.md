@@ -58,14 +58,12 @@ data/             saved data (created when the program exits)
 
 | File | What it does |
 |---|---|
-| `tree.c` | Tree struct, species list (8 built in, more can be added), status of a tree |
-| `hashmap.c` | Hash map (separate chaining) to find a tree by ID |
-| `heap.c` | Min heap to find the most urgent tree |
+| `tree.c` | Tree struct, species list (8 built in, more can be added), status of a tree, hash map (separate chaining) to find a tree by ID |
+| `heap.c` | Min heap to find the most urgent tree, background timer thread (pthreads) that dries the trees |
 | `graph.c` | Campus graph (adjacency list), Dijkstra, route planning |
 | `volunteer.c` | Volunteer list and leaderboard |
-| `simulation.c` | Background timer thread (pthreads) |
 | `fileio.c` | Saving and loading CSV files, sample data |
-| `ui.c` | Dashboard with colours, input functions |
+| `ui.c` | Dashboard with colours, input functions (declared in `treekeeper.h`) |
 | `main.c` | Menu |
 
 ## Data structures used
@@ -88,7 +86,7 @@ data/             saved data (created when the program exits)
 
 ## Threads
 
-`simulation.c` starts a thread with `pthread_create`. Every second it reduces the water level of all trees by `dryRate × speed`. Both the menu and the timer thread use the trees and the heap, so every access is protected with a `pthread_mutex_t`. On exit, `running` is set to 0 and `pthread_join` waits for the thread to finish.
+`heap.c` also starts a thread with `pthread_create`. Every second it reduces the water level of all trees by `dryRate × speed`. Both the menu and the timer thread use the trees and the heap, so every access is protected with a `pthread_mutex_t`. On exit, `running` is set to 0 and `pthread_join` waits for the thread to finish.
 
 ## Saved files
 
@@ -105,7 +103,7 @@ Lines that cannot be read (wrong format, zone that does not exist, water outside
 
 ## Testing
 
-`make test` runs `Tests/test.c` (36 test cases). It covers adding species, inserting, searching and deleting in the hash map (including rehashing and duplicate IDs), heap insert/update/remove/extract order, Dijkstra on a small graph (including an unreachable zone and a removed path), and saving data and loading it back.
+`make test` runs `Tests/test.c` (40 test cases). It covers adding species, the timer update (including a wilted assigned tree going back to the queue), inserting, searching and deleting in the hash map (including rehashing and duplicate IDs), heap insert/update/remove/extract order, Dijkstra on a small graph (including an unreachable zone and a removed path), and saving data and loading it back.
 
 `./a.out < Tests/test_input.txt` runs a full session from the menu. It includes wrong inputs such as an unknown species, an unknown zone, a missing tree ID and text instead of a number.
 

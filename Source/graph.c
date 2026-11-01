@@ -6,13 +6,9 @@
 
 Graph *createGraph(int capacity)
 {
-    if (capacity < 1)
-        capacity = 1;
-
     Graph *g = malloc(sizeof(Graph));
     if (g == NULL)
         return NULL;
-
     g->zones = malloc(capacity * sizeof(Zone));
     if (g->zones == NULL) {
         free(g);
@@ -23,13 +19,11 @@ Graph *createGraph(int capacity)
     return g;
 }
 
-// returns the index of the new zone, or -1 on error
+// returns the new zone's index, or -1 if the name is bad or already used
 int addZone(Graph *g, const char *name)
 {
-    if (g == NULL || name == NULL || strlen(name) == 0 || strlen(name) >= NAME_LEN)
+    if (strlen(name) == 0 || strlen(name) >= NAME_LEN || findZone(g, name) != -1)
         return -1;
-    if (findZone(g, name) != -1)
-        return -1;   // zone already exists
 
     if (g->count == g->capacity) {
         Zone *bigger = realloc(g->zones, 2 * g->capacity * sizeof(Zone));
@@ -45,7 +39,6 @@ int addZone(Graph *g, const char *name)
     return g->count - 1;
 }
 
-// returns index of the zone with this name, -1 if not found
 int findZone(Graph *g, const char *name)
 {
     for (int i = 0; i < g->count; i++) {
@@ -53,15 +46,6 @@ int findZone(Graph *g, const char *name)
             return i;
     }
     return -1;
-}
-
-static Edge *findEdge(Graph *g, int from, int to)
-{
-    for (Edge *e = g->zones[from].head; e != NULL; e = e->next) {
-        if (e->to == to)
-            return e;
-    }
-    return NULL;
 }
 
 static int addEdge(Graph *g, int from, int to, int dist)
@@ -73,35 +57,6 @@ static int addEdge(Graph *g, int from, int to, int dist)
     e->dist = dist;
     e->next = g->zones[from].head;
     g->zones[from].head = e;
-    return 1;
-}
-
-static int deleteEdge(Graph *g, int from, int to);
-
-// adds an undirected path, if it already exists the distance is updated
-int addPath(Graph *g, int a, int b, int dist)
-{
-    if (g == NULL || a < 0 || b < 0 || a >= g->count || b >= g->count || a == b || dist <= 0)
-        return 0;
-
-    Edge *ea = findEdge(g, a, b);
-    Edge *eb = findEdge(g, b, a);
-    if (ea != NULL && eb != NULL) {
-        ea->dist = dist;
-        eb->dist = dist;
-        return 1;
-    }
-    if (ea != NULL)
-        deleteEdge(g, a, b);
-    if (eb != NULL)
-        deleteEdge(g, b, a);
-
-    if (!addEdge(g, a, b, dist))
-        return 0;
-    if (!addEdge(g, b, a, dist)) {
-        removePath(g, a, b);
-        return 0;
-    }
     return 1;
 }
 
@@ -124,9 +79,27 @@ static int deleteEdge(Graph *g, int from, int to)
     return 0;
 }
 
+// undirected, so the edge is stored in both lists.
+// if the path already exists only the distance changes
+int addPath(Graph *g, int a, int b, int dist)
+{
+    if (a < 0 || b < 0 || a >= g->count || b >= g->count || a == b || dist <= 0)
+        return 0;
+
+    deleteEdge(g, a, b);
+    deleteEdge(g, b, a);
+    if (!addEdge(g, a, b, dist))
+        return 0;
+    if (!addEdge(g, b, a, dist)) {
+        deleteEdge(g, a, b);
+        return 0;
+    }
+    return 1;
+}
+
 int removePath(Graph *g, int a, int b)
 {
-    if (g == NULL || a < 0 || b < 0 || a >= g->count || b >= g->count)
+    if (a < 0 || b < 0 || a >= g->count || b >= g->count)
         return 0;
     int found = deleteEdge(g, a, b);
     deleteEdge(g, b, a);
@@ -135,8 +108,6 @@ int removePath(Graph *g, int a, int b)
 
 void printGraph(Graph *g)
 {
-    if (g == NULL)
-        return;
     printf("\nCampus map (adjacency list):\n");
     for (int i = 0; i < g->count; i++) {
         printf("  [%d] %-22s ->", i, g->zones[i].name);
@@ -148,36 +119,29 @@ void printGraph(Graph *g)
     }
 }
 
-// Dijkstra's algorithm (array version, O(V^2))
-// after it runs, dist[v] = shortest distance from src to v
-// and parent[v] = previous zone on that shortest path
+// array version of Dijkstra, O(V^2)
+// dist[v] = shortest distance from src, parent[v] = previous zone on that path
 void dijkstra(Graph *g, int src, int dist[], int parent[])
 {
-    if (g == NULL || g->count <= 0 || src < 0 || src >= g->count || dist == NULL || parent == NULL)
-        return;
-
-    int *visited = calloc(g->count, sizeof(int));
-    if (visited == NULL)
-        return;
+    int visited[g->count];
 
     for (int i = 0; i < g->count; i++) {
         dist[i] = INF;
         parent[i] = -1;
+        visited[i] = 0;
     }
     dist[src] = 0;
 
-    for (int count = 0; count < g->count; count++) {
-        // pick the unvisited zone with the smallest distance
+    for (int k = 0; k < g->count; k++) {
         int u = -1;
         for (int i = 0; i < g->count; i++) {
             if (!visited[i] && (u == -1 || dist[i] < dist[u]))
                 u = i;
         }
-        if (u == -1 || dist[u] == INF)
-            break;   // the remaining zones cannot be reached
+        if (dist[u] == INF)
+            break;   // rest of the zones cannot be reached
         visited[u] = 1;
 
-        // relax all paths going out of u
         for (Edge *e = g->zones[u].head; e != NULL; e = e->next) {
             if (!visited[e->to] && dist[u] + e->dist < dist[e->to]) {
                 dist[e->to] = dist[u] + e->dist;
@@ -185,10 +149,8 @@ void dijkstra(Graph *g, int src, int dist[], int parent[])
             }
         }
     }
-    free(visited);
 }
 
-// prints the path from src to v by following the parent array (recursive)
 static void printPath(Graph *g, int parent[], int v)
 {
     if (parent[v] == -1) {
@@ -199,62 +161,29 @@ static void printPath(Graph *g, int parent[], int v)
     printf(" -> %s", g->zones[v].name);
 }
 
-// prints the shortest path, returns the distance or -1 if unreachable
+// returns the distance, or -1 if dest cannot be reached
 int shortestPath(Graph *g, int src, int dest)
 {
-    if (g == NULL || src < 0 || dest < 0 || src >= g->count || dest >= g->count)
-        return -1;
-
-    int *dist = malloc(g->count * sizeof(int));
-    int *parent = malloc(g->count * sizeof(int));
-    if (dist == NULL || parent == NULL) {
-        free(dist);
-        free(parent);
-        return -1;
-    }
+    int dist[g->count], parent[g->count];
 
     dijkstra(g, src, dist, parent);
-    int result = -1;
-    if (dist[dest] != INF) {
-        printf("  ");
-        printPath(g, parent, dest);
-        printf("\n  Total distance: %d m\n", dist[dest]);
-        result = dist[dest];
-    }
-    free(dist);
-    free(parent);
-    return result;
+    if (dist[dest] == INF)
+        return -1;
+    printf("  ");
+    printPath(g, parent, dest);
+    printf("\n  Total distance: %d m\n", dist[dest]);
+    return dist[dest];
 }
 
-// plans a walk from start that visits every zone in stops[]
-// each time it goes to the nearest stop that is not visited yet (greedy)
-// returns total distance, or -1 if some stop cannot be reached
+// greedy walk: from the current zone always go to the nearest stop not visited yet.
+// returns the total distance, or -1 if some stop cannot be reached
 int planRoute(Graph *g, int start, int stops[], int n)
 {
-    if (g == NULL || g->count <= 0 || start < 0 || start >= g->count)
-        return -1;
-    if (n <= 0 || stops == NULL)
-        return 0;
+    int dist[g->count], parent[g->count], done[n];
+    int current = start, total = 0;
 
-    for (int i = 0; i < n; i++) {
-        if (stops[i] < 0 || stops[i] >= g->count) {
-            printf("  Invalid stop in route!\n");
-            return -1;
-        }
-    }
-
-    int *dist = malloc(g->count * sizeof(int));
-    int *parent = malloc(g->count * sizeof(int));
-    int *done = calloc(n > 0 ? n : 1, sizeof(int));
-    if (dist == NULL || parent == NULL || done == NULL) {
-        free(dist);
-        free(parent);
-        free(done);
-        return -1;
-    }
-
-    int current = start;
-    int total = 0;
+    for (int i = 0; i < n; i++)
+        done[i] = 0;
     printf("  Start at %s\n", g->zones[start].name);
 
     for (int step = 0; step < n; step++) {
@@ -267,8 +196,7 @@ int planRoute(Graph *g, int start, int stops[], int n)
         }
         if (dist[stops[best]] == INF) {
             printf("  %s cannot be reached!\n", g->zones[stops[best]].name);
-            total = -1;
-            break;
+            return -1;
         }
 
         done[best] = 1;
@@ -280,10 +208,6 @@ int planRoute(Graph *g, int start, int stops[], int n)
             current = stops[best];
         }
     }
-
-    free(dist);
-    free(parent);
-    free(done);
     return total;
 }
 

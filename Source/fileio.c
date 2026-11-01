@@ -2,13 +2,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <math.h>
 #include "treekeeper.h"
 
-// data is stored as CSV files inside one folder:
+// files in the data folder:
 //   settings.csv    simHours,nextTreeId,nextVolunteerId,speed
 //   species.csv     name,dryRate
-//   zones.csv       name                    (line number = zone index)
+//   zones.csv       name             (line number = zone index)
 //   paths.csv       zoneA,zoneB,distance
 //   trees.csv       id,species,zone,water,diseased,assignedTo
 //   volunteers.csv  id,name,zone,tasksDone
@@ -22,138 +21,134 @@ static FILE *openFile(const char *folder, const char *file, const char *mode)
 
 int saveData(System *sys, const char *folder)
 {
-    mkdir(folder, 0755);   // fails harmlessly if the folder already exists
+    mkdir(folder, 0755);   // fails without harm if it already exists
 
-    FILE *fs = openFile(folder, "settings.csv", "w");
-    FILE *fz = openFile(folder, "zones.csv", "w");
-    FILE *fp = openFile(folder, "paths.csv", "w");
-    FILE *ft = openFile(folder, "trees.csv", "w");
-    FILE *fv = openFile(folder, "volunteers.csv", "w");
-    FILE *fsp = openFile(folder, "species.csv", "w");
-
-    if (!fs || !fz || !fp || !ft || !fv || !fsp) {
-        printf("Error: could not open files in '%s' for saving.\n", folder);
-        if (fs) fclose(fs);
-        if (fz) fclose(fz);
-        if (fp) fclose(fp);
-        if (ft) fclose(ft);
-        if (fv) fclose(fv);
-        if (fsp) fclose(fsp);
+    FILE *f = openFile(folder, "settings.csv", "w");
+    if (f == NULL) {
+        printf("Error: could not save in '%s'.\n", folder);
         return 0;
     }
 
     pthread_mutex_lock(&sys->lock);
 
-    fprintf(fs, "%.2f,%d,%d,%.2f\n", sys->simHours, sys->nextTreeId, sys->nextVolunteerId, sys->speed);
+    fprintf(f, "%.2f,%d,%d,%.2f\n", sys->simHours, sys->nextTreeId, sys->nextVolunteerId, sys->speed);
+    fclose(f);
 
-    for (int i = 0; i < getSpeciesCount(); i++)
-        fprintf(fsp, "%s,%.2f\n", getSpecies(i)->name, getSpecies(i)->dryRate);
+    f = openFile(folder, "species.csv", "w");
+    if (f != NULL) {
+        for (int i = 0; i < speciesCount; i++)
+            fprintf(f, "%s,%.2f\n", speciesList[i].name, speciesList[i].dryRate);
+        fclose(f);
+    }
 
-    for (int i = 0; i < sys->map->count; i++) {
-        fprintf(fz, "%s\n", sys->map->zones[i].name);
-        for (Edge *e = sys->map->zones[i].head; e != NULL; e = e->next) {
-            if (i < e->to)   // each path is stored in both lists, save it once
-                fprintf(fp, "%d,%d,%d\n", i, e->to, e->dist);
+    f = openFile(folder, "zones.csv", "w");
+    if (f != NULL) {
+        for (int i = 0; i < sys->map->count; i++)
+            fprintf(f, "%s\n", sys->map->zones[i].name);
+        fclose(f);
+    }
+
+    f = openFile(folder, "paths.csv", "w");
+    if (f != NULL) {
+        for (int i = 0; i < sys->map->count; i++) {
+            for (Edge *e = sys->map->zones[i].head; e != NULL; e = e->next) {
+                if (i < e->to)   // every path is in both lists, save it once
+                    fprintf(f, "%d,%d,%d\n", i, e->to, e->dist);
+            }
         }
+        fclose(f);
     }
 
-    int n;
-    Tree **all = getAllTrees(sys->trees, &n);
-    for (int i = 0; i < n; i++) {
-        Tree *t = all[i];
-        fprintf(ft, "%d,%s,%d,%.2f,%d,%d\n", t->id, t->species, t->zone, t->water, t->diseased, t->assignedTo);
+    f = openFile(folder, "trees.csv", "w");
+    if (f != NULL) {
+        int n;
+        Tree **all = getAllTrees(sys->trees, &n);
+        for (int i = 0; i < n; i++)
+            fprintf(f, "%d,%s,%d,%.2f,%d,%d\n", all[i]->id, all[i]->species, all[i]->zone,
+                    all[i]->water, all[i]->diseased, all[i]->assignedTo);
+        free(all);
+        fclose(f);
     }
-    free(all);
 
-    for (int i = 0; i < sys->vols->count; i++) {
-        Volunteer *v = &sys->vols->list[i];
-        fprintf(fv, "%d,%s,%d,%d\n", v->id, v->name, v->zone, v->tasksDone);
+    f = openFile(folder, "volunteers.csv", "w");
+    if (f != NULL) {
+        for (int i = 0; i < sys->vols->count; i++) {
+            Volunteer *v = &sys->vols->list[i];
+            fprintf(f, "%d,%s,%d,%d\n", v->id, v->name, v->zone, v->tasksDone);
+        }
+        fclose(f);
     }
 
     pthread_mutex_unlock(&sys->lock);
-
-    fclose(fs);
-    fclose(fz);
-    fclose(fp);
-    fclose(ft);
-    fclose(fv);
-    fclose(fsp);
     return 1;
 }
 
-// adds a tree to the hash map, and to the heap if it is not assigned
+// puts the tree in the hash map, and in the heap if nobody is assigned to it
 static int addTree(System *sys, Tree *t)
 {
-    if (sys == NULL || t == NULL)
-        return 0;
     if (!hashInsert(sys->trees, t))
         return 0;
-    if (t->assignedTo == -1) {
-        if (!heapInsert(sys->heap, t)) {
-            hashDelete(sys->trees, t->id);
-            return 0;
-        }
+    if (t->assignedTo == -1 && !heapInsert(sys->heap, t)) {
+        hashDelete(sys->trees, t->id);
+        return 0;
     }
     return 1;
 }
 
-// returns 1 if data was loaded, 0 if there is no saved data
+// returns 0 if there is no saved data. bad lines are skipped
 int loadData(System *sys, const char *folder)
 {
-    char line[200];
+    char line[200], name[NAME_LEN];
     int skipped = 0;
 
-    FILE *fz = openFile(folder, "zones.csv", "r");
-    if (fz == NULL)
+    FILE *f = openFile(folder, "zones.csv", "r");
+    if (f == NULL)
         return 0;
-    while (fgets(line, sizeof(line), fz)) {
+    while (fgets(line, sizeof(line), f)) {
         line[strcspn(line, "\r\n")] = '\0';
         if (strlen(line) > 0 && addZone(sys->map, line) == -1)
             skipped++;
     }
-    fclose(fz);
-
+    fclose(f);
     if (sys->map->count == 0)
         return 0;
 
-    FILE *fs = openFile(folder, "settings.csv", "r");
-    if (fs != NULL) {
-        if (fscanf(fs, "%f,%d,%d,%f", &sys->simHours, &sys->nextTreeId, &sys->nextVolunteerId, &sys->speed) != 4)
+    f = openFile(folder, "settings.csv", "r");
+    if (f != NULL) {
+        if (fscanf(f, "%f,%d,%d,%f", &sys->simHours, &sys->nextTreeId, &sys->nextVolunteerId, &sys->speed) != 4)
             skipped++;
-        fclose(fs);
+        fclose(f);
     }
+    if (!(sys->speed > 0 && sys->speed <= 24))   // also catches nan
+        sys->speed = 0.05;
 
-    // species must be loaded before the trees, otherwise trees of a new species are skipped
-    FILE *fsp = openFile(folder, "species.csv", "r");
-    if (fsp != NULL) {
-        char name[NAME_LEN];
+    // species before trees, otherwise trees of an added species are skipped
+    f = openFile(folder, "species.csv", "r");
+    if (f != NULL) {
         float rate;
-        while (fgets(line, sizeof(line), fsp)) {
-            if (sscanf(line, "%29[^,],%f", name, &rate) != 2) {
+        while (fgets(line, sizeof(line), f)) {
+            if (sscanf(line, "%29[^,],%f", name, &rate) != 2)
                 skipped++;
-                continue;
-            }
-            if (getDryRate(name) < 0 && !addSpecies(name, rate))   // built in species are already there
+            else if (getDryRate(name) < 0 && !addSpecies(name, rate))
                 skipped++;
         }
-        fclose(fsp);
+        fclose(f);
     }
 
-    FILE *fp = openFile(folder, "paths.csv", "r");
-    if (fp != NULL) {
+    f = openFile(folder, "paths.csv", "r");
+    if (f != NULL) {
         int a, b, d;
-        while (fgets(line, sizeof(line), fp)) {
+        while (fgets(line, sizeof(line), f)) {
             if (sscanf(line, "%d,%d,%d", &a, &b, &d) != 3 || !addPath(sys->map, a, b, d))
                 skipped++;
         }
-        fclose(fp);
+        fclose(f);
     }
 
-    FILE *fv = openFile(folder, "volunteers.csv", "r");
-    if (fv != NULL) {
+    f = openFile(folder, "volunteers.csv", "r");
+    if (f != NULL) {
         int id, zone, tasks;
-        char name[NAME_LEN];
-        while (fgets(line, sizeof(line), fv)) {
+        while (fgets(line, sizeof(line), f)) {
             if (sscanf(line, "%d,%29[^,],%d,%d", &id, name, &zone, &tasks) != 4 ||
                 zone < 0 || zone >= sys->map->count ||
                 !addVolunteer(sys->vols, id, name, zone, tasks)) {
@@ -163,27 +158,27 @@ int loadData(System *sys, const char *folder)
             if (id >= sys->nextVolunteerId)
                 sys->nextVolunteerId = id + 1;
         }
-        fclose(fv);
+        fclose(f);
     }
 
-    FILE *ft = openFile(folder, "trees.csv", "r");
-    if (ft != NULL) {
+    f = openFile(folder, "trees.csv", "r");
+    if (f != NULL) {
         int id, zone, diseased, assigned;
         float water;
-        char species[NAME_LEN];
-        while (fgets(line, sizeof(line), ft)) {
-            if (sscanf(line, "%d,%29[^,],%d,%f,%d,%d", &id, species, &zone, &water, &diseased, &assigned) != 6 ||
+        while (fgets(line, sizeof(line), f)) {
+            if (sscanf(line, "%d,%29[^,],%d,%f,%d,%d", &id, name, &zone, &water, &diseased, &assigned) != 6 ||
                 zone < 0 || zone >= sys->map->count || water < 0 || water > 100) {
                 skipped++;
                 continue;
             }
-            Tree *t = createTree(id, species, zone, water);
+            Tree *t = createTree(id, name, zone, water);
             if (t == NULL) {
                 skipped++;
                 continue;
             }
             t->diseased = diseased;
-            t->assignedTo = (findVolunteer(sys->vols, assigned) != NULL) ? assigned : -1;
+            if (findVolunteer(sys->vols, assigned) != NULL)
+                t->assignedTo = assigned;
             if (!addTree(sys, t)) {
                 free(t);
                 skipped++;
@@ -192,34 +187,32 @@ int loadData(System *sys, const char *folder)
             if (id >= sys->nextTreeId)
                 sys->nextTreeId = id + 1;
         }
-        fclose(ft);
+        fclose(f);
     }
 
-    if (sys->speed <= 0 || isnan(sys->speed) || isinf(sys->speed))
-        sys->speed = 0.05f;
     if (skipped > 0)
         printf("Warning: %d invalid line(s) in the data files were skipped.\n", skipped);
     return 1;
 }
 
-// demo data used the first time the program runs
+// sample campus used the first time the program runs
 void loadSampleData(System *sys)
 {
-    const char *zones[] = {
+    char *zones[] = {
         "Main_Gate", "Admin_Block", "Library", "Lecture_Hall_Complex", "Orion",
         "Octagon", "Hostel_Zone", "Sports_Complex", "Golden_Jubilee", "Pond_Area"
     };
-    int paths[][3] = {
+    int paths[13][3] = {
         {0, 1, 450}, {1, 2, 300}, {1, 8, 350}, {2, 3, 250}, {2, 5, 400},
         {3, 4, 200}, {4, 5, 300}, {5, 6, 600}, {6, 7, 350}, {7, 9, 500},
         {8, 9, 700}, {8, 3, 550}, {0, 9, 1200}
     };
-    struct { const char *species; int zone; float water; } trees[] = {
-        {"Neem", 0, 92}, {"Banyan", 1, 71}, {"Mango", 2, 34}, {"Bamboo", 2, 48},
-        {"Peepal", 3, 65}, {"Teak", 4, 22}, {"Gulmohar", 5, 57}, {"Arjuna", 6, 15},
-        {"Neem", 6, 80}, {"Bamboo", 7, 28}, {"Mango", 8, 44}, {"Banyan", 9, 88},
-        {"Teak", 9, 39}, {"Gulmohar", 0, 12}, {"Peepal", 7, 96}, {"Arjuna", 1, 51}
+    char *species[] = {
+        "Neem", "Banyan", "Mango", "Bamboo", "Peepal", "Teak", "Gulmohar", "Arjuna",
+        "Neem", "Bamboo", "Mango", "Banyan", "Teak", "Gulmohar", "Peepal", "Arjuna"
     };
+    int treeZone[] = {0, 1, 2, 2, 3, 4, 5, 6, 6, 7, 8, 9, 9, 0, 7, 1};
+    float water[] = {92, 71, 34, 48, 65, 22, 57, 15, 80, 28, 44, 88, 39, 12, 96, 51};
 
     for (int i = 0; i < 10; i++)
         addZone(sys->map, zones[i]);
@@ -231,7 +224,7 @@ void loadSampleData(System *sys)
     addVolunteer(sys->vols, sys->nextVolunteerId++, "Shreya", 1, 0);
 
     for (int i = 0; i < 16; i++) {
-        Tree *t = createTree(sys->nextTreeId, trees[i].species, trees[i].zone, trees[i].water);
+        Tree *t = createTree(sys->nextTreeId, species[i], treeZone[i], water[i]);
         if (t != NULL && addTree(sys, t))
             sys->nextTreeId++;
         else
