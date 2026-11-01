@@ -1,21 +1,33 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <math.h>
 #include "treekeeper.h"
 
 // reduces the water of every tree as if 'hours' have passed
 // the caller must hold sys->lock
 void simulateHours(System *sys, float hours)
 {
+    if (sys == NULL || hours <= 0 || isnan(hours) || isinf(hours))
+        return;
+
     int n;
     Tree **all = getAllTrees(sys->trees, &n);
+    if (all != NULL) {
+        for (int i = 0; i < n; i++) {
+            all[i]->water -= all[i]->dryRate * hours;
+            if (all[i]->water < 0)
+                all[i]->water = 0;
 
-    for (int i = 0; i < n; i++) {
-        all[i]->water -= all[i]->dryRate * hours;
-        if (all[i]->water < 0)
-            all[i]->water = 0;
+            // If an assigned tree completely wilts before being watered,
+            // unassign it and return it to the urgent heap so it is not lost in limbo
+            if (all[i]->assignedTo != -1 && all[i]->water <= 0) {
+                all[i]->assignedTo = -1;
+                heapInsert(sys->heap, all[i]);
+            }
+        }
+        free(all);
     }
-    free(all);
 
     sys->simHours += hours;
     buildHeap(sys->heap);   // priorities changed, so fix the heap

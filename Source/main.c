@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include "treekeeper.h"
 #include "ui.h"
 
@@ -98,9 +99,11 @@ static Tree *askTree(System *sys)
         printf(RED "Invalid ID.\n" RESET);
         return NULL;
     }
+    pthread_mutex_lock(&sys->lock);
     Tree *t = hashSearch(sys->trees, id);
     if (t == NULL)
         printf(RED "No tree with ID %d.\n" RESET, id);
+    pthread_mutex_unlock(&sys->lock);
     return t;
 }
 
@@ -183,22 +186,27 @@ static void waterTree(System *sys)
         return;
 
     pthread_mutex_lock(&sys->lock);
-    t->water = 100;
-
-    Volunteer *v = findVolunteer(sys->vols, t->assignedTo);
-    if (v != NULL) {
-        v->tasksDone++;
-        printf(GREEN "Tree %d watered by %s.\n" RESET, t->id, v->name);
+    if (t->water >= 100.0f) {
+        printf(YELLOW "Tree %d is already fully watered (100.0%%).\n" RESET, t->id);
     } else {
-        printf(GREEN "Tree %d watered.\n" RESET, t->id);
+        t->water = 100.0f;
+        Volunteer *v = findVolunteer(sys->vols, t->assignedTo);
+        if (v != NULL) {
+            v->tasksDone++;
+            printf(GREEN "Tree %d watered by %s.\n" RESET, t->id, v->name);
+        } else {
+            printf(GREEN "Tree %d watered.\n" RESET, t->id);
+        }
     }
 
     // put it back in the queue (or update its position if it was already there)
     if (t->assignedTo != -1) {
         t->assignedTo = -1;
         heapInsert(sys->heap, t);
-    } else {
+    } else if (t->heapIndex != -1) {
         heapUpdate(sys->heap, t);
+    } else {
+        heapInsert(sys->heap, t);
     }
     pthread_mutex_unlock(&sys->lock);
 }
@@ -335,14 +343,19 @@ static void assignTrees(System *sys)
         printf(RED "No volunteer with that ID.\n" RESET);
         return;
     }
-    if (!readInt("How many trees? ", &k) || k <= 0) {
-        printf(RED "Enter a positive number.\n" RESET);
+    if (!readInt("How many trees? ", &k) || k <= 0 || k > 10000) {
+        printf(RED "Enter a positive number (up to 10000).\n" RESET);
         return;
     }
 
     pthread_mutex_lock(&sys->lock);
     Volunteer *v = findVolunteer(sys->vols, vid);
-    int *stops = malloc(k * sizeof(int));
+    if (v == NULL) {
+        pthread_mutex_unlock(&sys->lock);
+        return;
+    }
+    int maxTrees = k < sys->heap->size ? k : sys->heap->size;
+    int *stops = malloc((maxTrees > 0 ? maxTrees : 1) * sizeof(int));
     int count = 0;
 
     if (stops != NULL) {
@@ -371,8 +384,8 @@ static void assignTrees(System *sys)
 static void changeSpeed(System *sys)
 {
     float speed;
-    if (!readFloat("Simulated hours per real second: ", &speed) || speed <= 0 || speed > 100) {
-        printf(RED "Speed must be between 0 and 100.\n" RESET);
+    if (!readFloat("Simulated hours per real second: ", &speed) || speed <= 0 || speed > 24 || isnan(speed) || isinf(speed)) {
+        printf(RED "Speed must be between 0 and 24.\n" RESET);
         return;
     }
     pthread_mutex_lock(&sys->lock);
@@ -406,7 +419,7 @@ int main(void)
     sys.nextTreeId = 1001;
     sys.nextVolunteerId = 1;
     sys.simHours = 0;
-    sys.speed = 1;
+    sys.speed = 0.05f;
     sys.paused = 0;
     sys.running = 0;
 

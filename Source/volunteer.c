@@ -49,6 +49,8 @@ int addVolunteer(VolunteerList *vl, int id, const char *name, int zone, int task
 
 Volunteer *findVolunteer(VolunteerList *vl, int id)
 {
+    if (vl == NULL || vl->list == NULL)
+        return NULL;
     for (int i = 0; i < vl->count; i++) {
         if (vl->list[i].id == id)
             return &vl->list[i];
@@ -59,7 +61,7 @@ Volunteer *findVolunteer(VolunteerList *vl, int id)
 // prints volunteers sorted by tasks done (simple selection sort on a copy)
 void printLeaderboard(VolunteerList *vl)
 {
-    if (vl->count == 0) {
+    if (vl == NULL || vl->list == NULL || vl->count == 0) {
         printf("  No volunteers yet.\n");
         return;
     }

@@ -15,6 +15,8 @@ static int speciesCount = 8;
 // returns the position of a species in the list, or -1 if not found
 static int findSpecies(const char *species)
 {
+    if (species == NULL)
+        return -1;
     for (int i = 0; i < speciesCount; i++) {
         if (strcasecmp(species, speciesList[i].name) == 0)
             return i;
@@ -90,15 +92,19 @@ Tree *createTree(int id, const char *species, int zone, float water)
 // this is the priority used in the min heap (smaller = more urgent)
 float hoursLeft(Tree *t)
 {
+    if (t == NULL || t->dryRate <= 0)
+        return 0.0f;
     return t->water / t->dryRate;
 }
 
 const char *getStatus(Tree *t)
 {
-    if (t->diseased)
-        return "DISEASED";
+    if (t == NULL)
+        return "UNKNOWN";
     if (t->water <= 0)
         return "WILTED";
+    if (t->diseased)
+        return "DISEASED";
     if (t->water < 30)
         return "CRITICAL";
     if (t->water < 60)

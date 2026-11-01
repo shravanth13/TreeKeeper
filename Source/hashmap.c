@@ -11,6 +11,9 @@ static int hashFunction(int key, int size)
 
 HashMap *createHashMap(int size)
 {
+    if (size < 1)
+        size = 1;
+
     HashMap *map = malloc(sizeof(HashMap));
     if (map == NULL)
         return NULL;

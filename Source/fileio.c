@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <math.h>
 #include "treekeeper.h"
 
 // data is stored as CSV files inside one folder:
@@ -83,10 +84,16 @@ int saveData(System *sys, const char *folder)
 // adds a tree to the hash map, and to the heap if it is not assigned
 static int addTree(System *sys, Tree *t)
 {
+    if (sys == NULL || t == NULL)
+        return 0;
     if (!hashInsert(sys->trees, t))
         return 0;
-    if (t->assignedTo == -1)
-        heapInsert(sys->heap, t);
+    if (t->assignedTo == -1) {
+        if (!heapInsert(sys->heap, t)) {
+            hashDelete(sys->trees, t->id);
+            return 0;
+        }
+    }
     return 1;
 }
 
@@ -105,6 +112,9 @@ int loadData(System *sys, const char *folder)
             skipped++;
     }
     fclose(fz);
+
+    if (sys->map->count == 0)
+        return 0;
 
     FILE *fs = openFile(folder, "settings.csv", "r");
     if (fs != NULL) {
@@ -146,8 +156,12 @@ int loadData(System *sys, const char *folder)
         while (fgets(line, sizeof(line), fv)) {
             if (sscanf(line, "%d,%29[^,],%d,%d", &id, name, &zone, &tasks) != 4 ||
                 zone < 0 || zone >= sys->map->count ||
-                !addVolunteer(sys->vols, id, name, zone, tasks))
+                !addVolunteer(sys->vols, id, name, zone, tasks)) {
                 skipped++;
+                continue;
+            }
+            if (id >= sys->nextVolunteerId)
+                sys->nextVolunteerId = id + 1;
         }
         fclose(fv);
     }
@@ -181,8 +195,8 @@ int loadData(System *sys, const char *folder)
         fclose(ft);
     }
 
-    if (sys->speed <= 0)
-        sys->speed = 1;
+    if (sys->speed <= 0 || isnan(sys->speed) || isinf(sys->speed))
+        sys->speed = 0.05f;
     if (skipped > 0)
         printf("Warning: %d invalid line(s) in the data files were skipped.\n", skipped);
     return 1;

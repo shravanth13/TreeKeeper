@@ -1,0 +1,395 @@
+================================================================================
+TREEKEEPER CODEBASE BUG AUDIT REPORT
+================================================================================
+
+1. PRIMARY ISSUE: ALL PLANTS SUDDENLY GET WILTED (SIMULATION & TIME SCALE BUG)
+--------------------------------------------------------------------------------
+Files: Source/simulation.c (lines 8-22, 25-42), Source/main.c (lines 304, 325),
+       Source/fileio.c (lines 43, 104, 137-142)
+
+Root Cause & Mechanism:
+- The background timer thread (simulation.c: timerLoop) ticks every 1 real
+  second (sleep(1)) and executes simulateHours(sys, sys->speed).
+- In main.c:304, the default speed is initialized to sys.speed = 1.0 simulated
+  hours per real second.
+- This creates an extreme time scale mismatch: 1 real second = 1 simulated hour,
+  and 1 real minute = 60 simulated hours!
+- Each species has a dry rate between 1.2% and 2.8% water loss per simulated
+  hour (tree.c).
+- In the sample campus dataset (fileio.c: loadSampleData), trees are initialized
+  with water levels between 12% and 96%:
+    * Tree 1014 (Gulmohar, 12% water, 2.0%/hr rate): Wilts in 6 seconds.
+    * Tree 1008 (Arjuna, 15% water, 1.7%/hr rate): Wilts in 8.8 seconds.
+    * Tree 1006 (Teak, 22% water, 1.8%/hr rate): Wilts in 12.2 seconds.
+    * Tree 1010 (Bamboo, 28% water, 2.8%/hr rate): Wilts in 10.0 seconds.
+    * Tree 1003 (Mango, 34% water, 2.2%/hr rate): Wilts in 15.5 seconds.
+    * Tree 1017 (Neem, 92% water, 1.2%/hr rate): Wilts in 76.7 seconds.
+- Consequently, within just ~76 seconds (barely over one minute) of starting
+  the program, EVERY SINGLE TREE in the entire system hits 0% water and becomes
+  WILTED.
+- The timer thread is started immediately upon launching main() (main.c:325:
+  startTimer(&sys)) while unpaused. When a human user reads the menu or considers
+  their input, all plants wilt in the background before they finish reading.
+- Persistence compounding: When the user exits (option 0) or saves (option 17),
+  saveData() writes all trees with 0.00% water to data/trees.csv. On subsequent
+  runs, loadData() loads all trees with 0% water, leaving every single plant
+  permanently wilted from the very second the program starts up.
+- Extreme speed input vulnerability: In changeSpeed() (main.c:267-278), the
+  system permits any speed up to 100 hrs/sec. Entering speed = 100 drains 100%
+  water from all trees in a single second, instantly wilting every tree.
+
+
+2. ASSIGNED TREES EVAPORATE IN LIMBO AND NEVER RETURN TO URGENT QUEUE
+--------------------------------------------------------------------------------
+Files: Source/main.c (lines 247-252), Source/simulation.c (lines 10-21)
+
+Root Cause & Mechanism:
+- When trees are assigned to a volunteer in assignTrees() (main.c:248), they are
+  extracted from the min-heap using extractMin(sys->heap), which sets their
+  heapIndex to -1.
+- However, simulateHours() updates water levels for ALL trees in the hash map via
+  getAllTrees(sys->trees, &n), including assigned trees.
+- If a volunteer is assigned trees but does not water them immediately, those
+  trees continue to lose water in the background until reaching 0% (WILTED).
+- Because they were removed from the heap, they are never re-evaluated or
+  rebuilt by buildHeap(sys->heap), never appear in the dashboard's "Most urgent
+  trees" list, and cannot be reassigned to another volunteer. There is no
+  timeout or unassignment mechanism.
+
+
+3. DISEASE STATUS MASKS WILTED STATE AND SUPPRESSES URGENT WATER ALERTS
+--------------------------------------------------------------------------------
+Files: Source/tree.c (lines 63-74), Source/ui.c (lines 61-80)
+
+Root Cause & Mechanism:
+- In getStatus(Tree *t) (tree.c:63-74):
+    if (t->diseased) return "DISEASED";
+    if (t->water <= 0) return "WILTED";
+    ...
+- Because t->diseased is checked first, any diseased tree that completely runs
+  out of water (water <= 0) will ALWAYS return "DISEASED" and never "WILTED".
+- In showDashboard() (ui.c:61-80), tree counts are tallied by string comparison
+  against getStatus(). Diseased trees with 0% water increment 'diseased' rather
+  than 'wilted' or 'critical'.
+- The dashboard alert checks: if (critical + wilted > 0) ALERT: tree(s) need
+  water urgently! Diseased trees with zero water are completely excluded from
+  this alert, so if all trees are diseased and drying out, zero alerts trigger.
+
+
+4. BUFFER UNDERFLOW AND OUT-OF-BOUNDS ACCESS IN HEAP OPERATIONS
+--------------------------------------------------------------------------------
+Files: Source/heap.c (lines 107-125, 128-134)
+
+Root Cause & Mechanism:
+- In heapRemove(MinHeap *heap, Tree *t) (heap.c:107-125):
+  The function checks `if (heap == NULL || t == NULL || t->heapIndex < 0) return;`
+  It never checks whether `heap->size == 0` or whether `t->heapIndex < heap->size`.
+  If called when `heap->size == 0` but `t->heapIndex >= 0`, `last` becomes -1.
+  It then executes `swap(heap, i, -1)`, accessing `heap->arr[-1]` (buffer
+  underflow and memory corruption).
+  Similarly, if `t->heapIndex >= heap->size`, `swap(heap, i, last)` accesses
+  `heap->arr[i]` out of bounds.
+- In heapUpdate(MinHeap *heap, Tree *t) (heap.c:128-134):
+  The function does not verify `t->heapIndex < heap->size` before calling
+  `heapifyUp` and `heapifyDown`, allowing out-of-bounds reads/writes if
+  heapIndex is out of range.
+
+
+5. MIN-HEAP DUPLICATE INSERTION INVARIANT VIOLATION
+--------------------------------------------------------------------------------
+Files: Source/heap.c (lines 67-86)
+
+Root Cause & Mechanism:
+- heapInsert() does not check whether `t->heapIndex != -1` or whether `t` is
+  already present in the heap.
+- If heapInsert() is called on an already inserted tree, duplicate pointers to
+  the same Tree are added to `heap->arr`, overwriting `t->heapIndex` with the
+  new position.
+- This creates orphaned/duplicate heap entries, breaking heap ordering invariants
+  and causing corruption during subsequent removals.
+
+
+6. OUT-OF-BOUNDS MEMORY WRITE IN DIJKSTRA ALGORITHM
+--------------------------------------------------------------------------------
+Files: Source/graph.c (lines 146-177)
+
+Root Cause & Mechanism:
+- In dijkstra(Graph *g, int src, int dist[], int parent[]):
+  The function does not validate `src < 0 || src >= g->count`.
+  It immediately executes `dist[src] = 0;`.
+  If `src` is invalid or negative, it writes directly out of bounds of the
+  `dist` buffer.
+  Furthermore, if `g->count == 0`, `calloc(0)` behavior is implementation-defined
+  and `dist[src] = 0` writes out of bounds.
+
+
+7. MISSING PARAMETER BOUNDS CHECKING AND CRASH IN `planRoute`
+--------------------------------------------------------------------------------
+Files: Source/graph.c (lines 220-264)
+
+Root Cause & Mechanism:
+- In planRoute(Graph *g, int start, int stops[], int n):
+  `printf("  Start at %s\n", g->zones[start].name);` accesses `g->zones[start]`
+  without validating that `start >= 0 && start < g->count`. An invalid `start`
+  causes an immediate out-of-bounds memory read / segfault.
+- None of the stop indices in `stops[i]` are validated against `g->count`.
+  If any `stops[i] < 0 || stops[i] >= g->count`, `dist[stops[i]]` accesses out
+  of bounds.
+- If `g == NULL` or `g->count <= 0`, calling `planRoute` causes a crash.
+
+
+8. POTENTIAL NULL POINTER DEREFERENCE / CRASH IN `addPath`
+--------------------------------------------------------------------------------
+Files: Source/graph.c (lines 85-90)
+
+Root Cause & Mechanism:
+- In addPath():
+    Edge *e = findEdge(g, a, b);
+    if (e != NULL) {
+        e->dist = dist;
+        findEdge(g, b, a)->dist = dist;
+        return 1;
+    }
+- If an edge exists from `a` to `b` but not from `b` to `a` (which can happen
+  if paths.csv is modified/corrupted with asymmetric entries or if a previous
+  insertion failed), `findEdge(g, b, a)` returns NULL.
+- Calling `findEdge(g, b, a)->dist = dist` dereferences NULL and crashes with
+  a segmentation fault.
+
+
+9. UNCHECKED ALLOCATION FAILURE AND DANGLING POINTER IN `fileio.c:addTree`
+--------------------------------------------------------------------------------
+Files: Source/fileio.c (lines 77-84, 150-154)
+
+Root Cause & Mechanism:
+- In addTree(System *sys, Tree *t):
+    if (!hashInsert(sys->trees, t))
+        return 0;
+    if (t->assignedTo == -1)
+        heapInsert(sys->heap, t);
+    return 1;
+- The return value of heapInsert() is ignored. If heapInsert fails (e.g. realloc
+  fails due to OOM), addTree still returns 1 (success).
+- The tree is stored in the hash map with heapIndex = -1, but is absent from
+  the heap, meaning it will never appear in urgent lists or route planning.
+- In contrast, plantTree() in main.c:66-68 properly calls hashDelete() and
+  free(t) if heapInsert fails.
+
+
+10. LOST `nextVolunteerId` ON MISSING OR CORRUPTED `settings.csv`
+--------------------------------------------------------------------------------
+Files: Source/fileio.c (lines 104, 119-130, 155-156), Source/main.c (lines 217-222)
+
+Root Cause & Mechanism:
+- In loadData(), when loading trees from trees.csv, the system dynamically
+  recovers the ID counter:
+    `if (id >= sys->nextTreeId) sys->nextTreeId = id + 1;`
+- However, when loading volunteers from volunteers.csv, there is no corresponding
+  counter update for `sys->nextVolunteerId`.
+- If settings.csv is missing, corrupt, or truncated, `sys->nextVolunteerId`
+  retains its default value of 1.
+- Because volunteers with ID 1, 2, 3... already exist from volunteers.csv, any
+  subsequent attempt to add a volunteer (option 12) invokes addVolunteer() with
+  duplicate ID 1, which fails.
+- Because newVolunteer() (main.c:217) does not increment nextVolunteerId upon
+  failure, all future volunteer additions fail indefinitely.
+
+
+11. DATA LOSS AND FILE TRUNCATION ON PARTIAL `saveData` FAILURE
+--------------------------------------------------------------------------------
+Files: Source/fileio.c (lines 25-39)
+
+Root Cause & Mechanism:
+- In saveData():
+    FILE *fs = openFile(folder, "settings.csv", "w");
+    FILE *fz = openFile(folder, "zones.csv", "w");
+    FILE *fp = openFile(folder, "paths.csv", "w");
+    FILE *ft = openFile(folder, "trees.csv", "w");
+    FILE *fv = openFile(folder, "volunteers.csv", "w");
+    if (!fs || !fz || !fp || !ft || !fv) { ... abort ... }
+- Mode "w" immediately truncates files to 0 bytes upon opening.
+- If any subsequent file fails to open (e.g. volunteers.csv due to disk full or
+  permissions), the function aborts and closes all opened files without writing.
+- Any files that were successfully opened have already been wiped empty,
+  destroying the user's saved data.
+
+
+12. PARTIAL DATA LOAD LEAVES SYSTEM IN AN INCONSISTENT / EMPTY STATE
+--------------------------------------------------------------------------------
+Files: Source/fileio.c (lines 92-94), Source/main.c (lines 318-323)
+
+Root Cause & Mechanism:
+- In loadData(), the function checks only:
+    `FILE *fz = openFile(folder, "zones.csv", "r"); if (fz == NULL) return 0;`
+  and returns 1 at the end regardless of whether trees.csv or volunteers.csv exist.
+- If data/zones.csv exists but trees.csv and volunteers.csv are missing or empty:
+  `loadData` returns 1.
+- In main.c:318, because loadData returned 1, loadSampleData() is NOT called.
+- The application launches with 0 trees and 0 volunteers, leaving the system in
+  a dysfunctional, empty state.
+
+
+13. FLOATING-POINT NaN (NOT-A-NUMBER) INJECTION CORRUPTS SIMULATION AND TREES
+--------------------------------------------------------------------------------
+Files: Source/ui.c (lines 124-132), Source/main.c (lines 59, 270)
+
+Root Cause & Mechanism:
+- readFloat() uses `sscanf(line, "%f %c", value, &extra)`. Under C99, entering
+  "nan" is parsed successfully into a NaN float value.
+- In changeSpeed() (main.c:270):
+    `if (!readFloat(...) || speed <= 0 || speed > 100)`
+  In IEEE 754 float arithmetic, `NaN <= 0` is false and `NaN > 100` is false.
+  Therefore, NaN passes validation and sets `sys->speed = NaN`.
+- In simulateHours(), subtracting `dryRate * NaN` turns all tree water levels
+  into NaN, and `sys->simHours` becomes NaN.
+- In getStatus(), `NaN <= 0`, `NaN < 30`, and `NaN < 60` all evaluate to false,
+  causing all NaN-water trees to be reported as "HEALTHY" forever.
+- In plantTree() (main.c:59), entering "nan" for water similarly bypasses
+  `water < 0 || water > 100` and creates a tree with NaN water.
+
+
+14. DATA RACE / MISSING SYNCHRONIZATION IN TREE LOOKUPS (`askTree`)
+--------------------------------------------------------------------------------
+Files: Source/main.c (lines 33-44, 80-146), Source/simulation.c (lines 25-42)
+
+Root Cause & Mechanism:
+- In askTree() (main.c:33-44):
+    `Tree *t = hashSearch(sys->trees, id);`
+  is called WITHOUT holding `sys->lock`.
+- askTree() is invoked before acquiring `sys->lock` in:
+    * waterTree (lines 81-85)
+    * searchTree (lines 108-111)
+    * setDisease (lines 120-128)
+    * removeTree (lines 136-139)
+- Concurrently, the background timer thread locks `sys->lock` and iterates
+  through `sys->trees` and updates water in simulateHours().
+- Accessing hash map nodes and tree structures across threads without
+  synchronization constitutes a data race under the POSIX/C memory model.
+
+
+15. DIVISION BY ZERO VULNERABILITY IN `createHashMap`
+--------------------------------------------------------------------------------
+Files: Source/hashmap.c (lines 12-26)
+
+Root Cause & Mechanism:
+- Unlike createHeap, createGraph, and createVolunteerList (which sanitize
+  `capacity < 1` to `1`), createHashMap(int size) does not check if `size < 1`.
+- If createHashMap is called with `size <= 0`, hashFunction() performs
+  `key % size` (division by zero), causing an immediate crash (SIGFPE).
+
+
+16. MISSING NULL-POINTER GUARDS IN `volunteer.c`
+--------------------------------------------------------------------------------
+Files: Source/volunteer.c (lines 50-57, 59-86)
+
+Root Cause & Mechanism:
+- findVolunteer(VolunteerList *vl, int id) and printLeaderboard(VolunteerList *vl)
+  do not check `if (vl == NULL)`.
+- If passed a NULL list, both functions immediately dereference NULL at
+  `vl->count`, causing a segmentation fault.
+
+
+17. UNASSIGNED TREES CANNOT CREDIT VOLUNTEERS & INCORRECT WATERING ATTRIBUTION
+--------------------------------------------------------------------------------
+Files: Source/main.c (lines 80-104)
+
+Root Cause & Mechanism:
+- In waterTree() (option 3), the user is only prompted for tree ID, not
+  volunteer ID.
+- Credit is given based entirely on `findVolunteer(sys->vols, t->assignedTo)`.
+- If an unassigned tree (assignedTo == -1) needs water or wilts, any volunteer
+  who waters it receives 0 credit on the leaderboard.
+- Conversely, if volunteer A waters a tree that was pre-assigned to volunteer B,
+  credit is unconditionally given to volunteer B.
+
+
+18. VOLUNTEER TASK EXPLOIT: WATERING ALREADY-FULL TREES
+--------------------------------------------------------------------------------
+Files: Source/main.c (lines 80-104)
+
+Root Cause & Mechanism:
+- waterTree() does not verify whether `t->water == 100` or whether the tree
+  actually required water.
+- A volunteer can repeatedly enter the ID of an already watered tree and
+  infinitely increment `v->tasksDone` on the leaderboard without performing work.
+
+
+19. INTEGER OVERFLOW IN `assignTrees` MALLOC ALLOCATION
+--------------------------------------------------------------------------------
+Files: Source/main.c (lines 234-241)
+
+Root Cause & Mechanism:
+- In assignTrees():
+    `readInt("How many trees? ", &k)`
+    `int *stops = malloc(k * sizeof(int));`
+- There is no upper bound check on `k`.
+- Entering a large integer (such as `1000000000`) causes `k * sizeof(int)` to
+  overflow 32-bit `size_t`, allocating an unexpectedly small buffer and leading
+  to heap memory corruption when elements are written into `stops[count++]`.
+
+
+20. UNCONSUMED STDIN BUFFER IN INPUT HELPERS ON LONG INPUTS
+--------------------------------------------------------------------------------
+Files: Source/ui.c (lines 114-152)
+
+Root Cause & Mechanism:
+- readInt(), readFloat(), and readString() use a stack buffer of `char line[100];`
+  with `fgets(line, sizeof(line), stdin)`.
+- If a user inputs or pastes a line exceeding 99 characters, fgets reads only
+  the first 99 characters, leaving the remaining characters in the stdin buffer.
+- The next prompt or menu loop immediately consumes these leftover characters
+  without pausing for user input, causing unintended menu selections or errors.
+================================================================================
+
+
+//
+I have gone through all files in the codebase, analyzed the data structures, algorithms, concurrency model, file I/O, and UI implementations, and
+  documented all identified bugs in bugs.txt. No other files or code were modified.
+  ### Key Finding: Why All Plants Suddenly Wilt
+  The primary reason you observed all plants suddenly wilting is an extreme simulation time scale mismatch combined with an unthrottled background
+  thread:
+
+  1. Simulation Rate: In simulation.c:25-42, timerLoop runs in the background and calls simulateHours(sys, sys->speed) every real second (sleep(1)).
+  2. Default Speed: In main.c:304, default speed is 1.0 simulated hours per real second. This means 1 real second = 1 simulated hour (and 1 real minute
+  = 60 simulated hours).
+  3. Depletion Speed: Plants dry at rates between 1.2% and 2.8% water per hour (tree.c:13-15). In the default sample dataset:
+      • Tree 1014 (Gulmohar, 12% water) wilts in 6 seconds.
+      • Tree 1008 (Arjuna, 15% water) wilts in 8.8 seconds.
+      • The highest-water tree, Tree 1001 (Neem, 92% water), completely drains in 76.7 seconds.
+  4. Immediate Launch: The timer starts running immediately on program startup (main.c:325) without pausing or user confirmation. By the time a user
+  finishes reading the menu, every plant in the campus hits 0% water and wilts.
+  5. Persistence: When exiting or saving, all 0% water values are written to data/trees.csv. On every subsequent startup, loadData() loads 0% water,
+  making all plants permanently wilted from the instant the program starts.
+  ──────
+  ### Summary of Bugs Listed in bugs.txt
+  The complete details for all 20 identified bugs are recorded in bugs.txt:
+  1. Primary Simulation & Time Scale Bug: Unthrottled timer depleting all trees within ~76 seconds and persisting 0% water on exit.
+  2. Assigned Trees Abandoned in Limbo: Assigned trees are extracted from the heap but continue losing water in simulateHours(), quietly wilting without
+  appearing in urgent queues or being reassignable.
+  3. Disease Status Masks Water Depletion: getStatus() checks t->diseased first, hiding "WILTED" status and suppressing urgent water alerts even if the
+  tree has 0% water.
+  4. Buffer Underflow in heapRemove & OOB in heapUpdate: Missing heap->size == 0 and bounds checks causes negative index access heap->arr[-1].
+  5. Min-Heap Duplicate Insertion: heapInsert does not check for duplicate entries, corrupting heapIndex tracking and breaking heap invariants.
+  6. Out-of-Bounds Write in dijkstra: dist[src] = 0 lacks source node bounds validation, leading to out-of-bounds writes if src is invalid or g->count
+  == 0.
+  7. Missing Bounds Checks in planRoute: g->zones[start] and stops[i] lack validation against g->count, leading to out-of-bounds reads and segfaults.
+  8. Null Pointer Dereference in addPath: Asymmetric edge updates dereference findEdge(g, b, a)->dist without checking for NULL.
+  9. Unchecked Allocation Failure in fileio.c:addTree: Ignores heapInsert() failure, leaving trees in the hash map with heapIndex = -1 and disconnected
+  from the heap.
+  10. Lost nextVolunteerId on Corrupted settings.csv: Counter is not recovered from volunteers.csv, causing duplicate ID collisions and preventing new
+  volunteer creation.
+  11. Data Loss on Partial saveData Failure: Mode "w" immediately truncates all files to 0 bytes before confirming all files can open.
+  12. Partial Data Load Leaves Empty State: loadData() returns success if only zones.csv exists, bypassing sample campus initialization and leaving 0
+  trees and 0 volunteers.
+  13. Floating-Point NaN Injection: Inputting nan passes changeSpeed and plantTree range validations, permanently corrupting simulation time and water
+  levels.
+  14. Thread Safety / Data Race in askTree: hashSearch() is called without holding sys->lock while the timer thread concurrently modifies trees.
+  15. Division by Zero in createHashMap: Missing size < 1 check causes key % 0 (SIGFPE) if called with non-positive size.
+  16. Missing NULL-Pointer Guards in volunteer.c: findVolunteer and printLeaderboard crash if passed a NULL list pointer.
+  17. Watering Attribution Flaw: Unassigned trees give 0 credit to volunteers who water them, and pre-assigned trees credit the assignee rather than the
+  volunteer who actually performed the watering.
+  18. Volunteer Task Count Exploit: Repeatedly watering an already 100% full tree awards infinite leaderboard credits.
+  19. Integer Overflow in assignTrees: Unbounded tree count k overflows malloc(k * sizeof(int)).
+  20. Unconsumed Stdin Leftovers: Input buffers longer than 99 characters leave characters in stdin, corrupting subsequent prompts.
+
+  agy --conversation=40c12662-4c4a-4f56-bc8a-5b37dbeb858d

@@ -66,7 +66,7 @@ static void heapifyDown(MinHeap *heap, int i)
 // returns 1 on success, 0 if memory could not be allocated
 int heapInsert(MinHeap *heap, Tree *t)
 {
-    if (heap == NULL || t == NULL)
+    if (heap == NULL || t == NULL || t->heapIndex != -1)
         return 0;
 
     // array is full, so double its size
@@ -87,7 +87,7 @@ int heapInsert(MinHeap *heap, Tree *t)
 
 Tree *heapPeek(MinHeap *heap)
 {
-    if (heap == NULL || heap->size == 0)
+    if (heap == NULL || heap->size <= 0)
         return NULL;
     return heap->arr[0];
 }
@@ -95,7 +95,7 @@ Tree *heapPeek(MinHeap *heap)
 // removes and returns the most urgent tree
 Tree *extractMin(MinHeap *heap)
 {
-    if (heap == NULL || heap->size == 0)
+    if (heap == NULL || heap->size <= 0)
         return NULL;
 
     Tree *min = heap->arr[0];
@@ -106,7 +106,9 @@ Tree *extractMin(MinHeap *heap)
 // removes any tree from the heap using its stored index, O(log n)
 void heapRemove(MinHeap *heap, Tree *t)
 {
-    if (heap == NULL || t == NULL || t->heapIndex < 0)
+    if (heap == NULL || t == NULL || t->heapIndex < 0 || heap->size <= 0)
+        return;
+    if (t->heapIndex >= heap->size || heap->arr[t->heapIndex] != t)
         return;
 
     int i = t->heapIndex;
@@ -127,7 +129,9 @@ void heapRemove(MinHeap *heap, Tree *t)
 // call this after a tree's water level changes
 void heapUpdate(MinHeap *heap, Tree *t)
 {
-    if (heap == NULL || t == NULL || t->heapIndex < 0)
+    if (heap == NULL || t == NULL || t->heapIndex < 0 || t->heapIndex >= heap->size)
+        return;
+    if (heap->arr[t->heapIndex] != t)
         return;
     heapifyUp(heap, t->heapIndex);
     heapifyDown(heap, t->heapIndex);
@@ -136,6 +140,8 @@ void heapUpdate(MinHeap *heap, Tree *t)
 // rebuilds the whole heap in O(n), used after the timer changes all water levels
 void buildHeap(MinHeap *heap)
 {
+    if (heap == NULL || heap->size <= 1)
+        return;
     for (int i = heap->size / 2 - 1; i >= 0; i--)
         heapifyDown(heap, i);
 }

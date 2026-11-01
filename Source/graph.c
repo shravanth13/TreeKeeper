@@ -76,18 +76,25 @@ static int addEdge(Graph *g, int from, int to, int dist)
     return 1;
 }
 
+static int deleteEdge(Graph *g, int from, int to);
+
 // adds an undirected path, if it already exists the distance is updated
 int addPath(Graph *g, int a, int b, int dist)
 {
     if (g == NULL || a < 0 || b < 0 || a >= g->count || b >= g->count || a == b || dist <= 0)
         return 0;
 
-    Edge *e = findEdge(g, a, b);
-    if (e != NULL) {
-        e->dist = dist;
-        findEdge(g, b, a)->dist = dist;
+    Edge *ea = findEdge(g, a, b);
+    Edge *eb = findEdge(g, b, a);
+    if (ea != NULL && eb != NULL) {
+        ea->dist = dist;
+        eb->dist = dist;
         return 1;
     }
+    if (ea != NULL)
+        deleteEdge(g, a, b);
+    if (eb != NULL)
+        deleteEdge(g, b, a);
 
     if (!addEdge(g, a, b, dist))
         return 0;
@@ -128,6 +135,8 @@ int removePath(Graph *g, int a, int b)
 
 void printGraph(Graph *g)
 {
+    if (g == NULL)
+        return;
     printf("\nCampus map (adjacency list):\n");
     for (int i = 0; i < g->count; i++) {
         printf("  [%d] %-22s ->", i, g->zones[i].name);
@@ -144,6 +153,9 @@ void printGraph(Graph *g)
 // and parent[v] = previous zone on that shortest path
 void dijkstra(Graph *g, int src, int dist[], int parent[])
 {
+    if (g == NULL || g->count <= 0 || src < 0 || src >= g->count || dist == NULL || parent == NULL)
+        return;
+
     int *visited = calloc(g->count, sizeof(int));
     if (visited == NULL)
         return;
@@ -219,6 +231,18 @@ int shortestPath(Graph *g, int src, int dest)
 // returns total distance, or -1 if some stop cannot be reached
 int planRoute(Graph *g, int start, int stops[], int n)
 {
+    if (g == NULL || g->count <= 0 || start < 0 || start >= g->count)
+        return -1;
+    if (n <= 0 || stops == NULL)
+        return 0;
+
+    for (int i = 0; i < n; i++) {
+        if (stops[i] < 0 || stops[i] >= g->count) {
+            printf("  Invalid stop in route!\n");
+            return -1;
+        }
+    }
+
     int *dist = malloc(g->count * sizeof(int));
     int *parent = malloc(g->count * sizeof(int));
     int *done = calloc(n > 0 ? n : 1, sizeof(int));

@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include "ui.h"
 
 #define DASHBOARD_ROWS 5
@@ -12,10 +13,12 @@ void clearScreen(void)
 
 const char *statusColor(Tree *t)
 {
-    if (t->diseased)
-        return MAGENTA;
+    if (t == NULL)
+        return RESET;
     if (t->water < 30)
         return RED;
+    if (t->diseased)
+        return MAGENTA;
     if (t->water < 60)
         return YELLOW;
     return GREEN;
@@ -55,23 +58,28 @@ void showDashboard(System *sys)
     int hour = (int)sys->simHours % 24;
 
     printf(BOLD GREEN "\n=============== TREEKEEPER DASHBOARD ===============\n" RESET);
-    printf("  Time: Day %d, %02d:00   Speed: %.1f hrs/sec   %s\n", day, hour, sys->speed,
+    printf("  Time: Day %d, %02d:00   Speed: %.2f hrs/sec   %s\n", day, hour, sys->speed,
            sys->paused ? YELLOW "[PAUSED]" RESET : GREEN "[RUNNING]" RESET);
 
     // count trees by status
     int n, healthy = 0, thirsty = 0, critical = 0, wilted = 0, diseased = 0, assigned = 0;
     Tree **all = getAllTrees(sys->trees, &n);
-    for (int i = 0; i < n; i++) {
-        const char *s = getStatus(all[i]);
-        if (strcmp(s, "HEALTHY") == 0) healthy++;
-        else if (strcmp(s, "THIRSTY") == 0) thirsty++;
-        else if (strcmp(s, "CRITICAL") == 0) critical++;
-        else if (strcmp(s, "WILTED") == 0) wilted++;
-        else diseased++;
-        if (all[i]->assignedTo != -1)
-            assigned++;
+    if (all != NULL) {
+        for (int i = 0; i < n; i++) {
+            if (all[i]->diseased)
+                diseased++;
+
+            const char *s = getStatus(all[i]);
+            if (strcmp(s, "HEALTHY") == 0) healthy++;
+            else if (strcmp(s, "THIRSTY") == 0) thirsty++;
+            else if (strcmp(s, "CRITICAL") == 0) critical++;
+            else if (strcmp(s, "WILTED") == 0) wilted++;
+
+            if (all[i]->assignedTo != -1)
+                assigned++;
+        }
+        free(all);
     }
-    free(all);
 
     printf("  Trees: %d   " GREEN "Healthy %d  " YELLOW "Thirsty %d  " RED "Critical %d  Wilted %d  "
            MAGENTA "Diseased %d" RESET "\n", n, healthy, thirsty, critical, wilted, diseased);
@@ -79,35 +87,50 @@ void showDashboard(System *sys)
     if (critical + wilted > 0)
         printf(RED BOLD "  ALERT: %d tree(s) need water urgently!\n" RESET, critical + wilted);
 
-    // show the most urgent trees without changing the real heap:
-    // copy the heap array into a temporary heap and extract from the copy
+    // show the most urgent trees without mutating the heap or tree heapIndex
     printf(BOLD CYAN "\n  Most urgent trees (from min heap):\n" RESET);
-    if (sys->heap->size == 0) {
+    if (sys->heap == NULL || sys->heap->size == 0) {
         printf("  Queue is empty.\n");
     } else {
-        MinHeap *copy = createHeap(sys->heap->size);
-        if (copy != NULL) {
-            for (int i = 0; i < sys->heap->size; i++)
-                copy->arr[i] = sys->heap->arr[i];
-            copy->size = sys->heap->size;
+        int count = sys->heap->size < DASHBOARD_ROWS ? sys->heap->size : DASHBOARD_ROWS;
+        Tree *top[DASHBOARD_ROWS];
+        int *used = calloc(sys->heap->size, sizeof(int));
+        if (used != NULL) {
+            for (int r = 0; r < count; r++) {
+                int best = -1;
+                for (int i = 0; i < sys->heap->size; i++) {
+                    if (!used[i] && (best == -1 || hoursLeft(sys->heap->arr[i]) < hoursLeft(sys->heap->arr[best])))
+                        best = i;
+                }
+                if (best != -1) {
+                    used[best] = 1;
+                    top[r] = sys->heap->arr[best];
+                } else {
+                    count = r;
+                    break;
+                }
+            }
+            free(used);
 
             printTableHeader();
-            for (int i = 0; i < DASHBOARD_ROWS && copy->size > 0; i++)
-                printTreeRow(sys, extractMin(copy));
-            freeHeap(copy);
+            for (int i = 0; i < count; i++)
+                printTreeRow(sys, top[i]);
         }
     }
-
-    // extracting from the copy changed the trees' heapIndex values,
-    // so set them back to their positions in the real heap
-    for (int i = 0; i < sys->heap->size; i++)
-        sys->heap->arr[i]->heapIndex = i;
 
     printf(BOLD CYAN "\n  Volunteer leaderboard:\n" RESET);
     printLeaderboard(sys->vols);
     printf(BOLD GREEN "====================================================\n" RESET);
 
     pthread_mutex_unlock(&sys->lock);
+}
+
+static void flushInputIfNeeded(const char *line)
+{
+    if (strchr(line, '\n') == NULL && !feof(stdin)) {
+        int ch;
+        while ((ch = getchar()) != '\n' && ch != EOF);
+    }
 }
 
 // reads one line and converts it to an int, returns 0 if input is invalid
@@ -118,6 +141,7 @@ int readInt(const char *prompt, int *value)
     printf("%s", prompt);
     if (fgets(line, sizeof(line), stdin) == NULL)
         return 0;
+    flushInputIfNeeded(line);
     return sscanf(line, "%d %c", value, &extra) == 1;
 }
 
@@ -128,7 +152,12 @@ int readFloat(const char *prompt, float *value)
     printf("%s", prompt);
     if (fgets(line, sizeof(line), stdin) == NULL)
         return 0;
-    return sscanf(line, "%f %c", value, &extra) == 1;
+    flushInputIfNeeded(line);
+    if (sscanf(line, "%f %c", value, &extra) != 1)
+        return 0;
+    if (isnan(*value) || isinf(*value))
+        return 0;
+    return 1;
 }
 
 // reads one word. Spaces inside the word are changed to '_' (so "Main Gate"
@@ -139,6 +168,7 @@ int readString(const char *prompt, char *buf, int size)
     printf("%s", prompt);
     if (fgets(line, sizeof(line), stdin) == NULL)
         return 0;
+    flushInputIfNeeded(line);
     line[strcspn(line, "\r\n")] = '\0';
 
     // skip spaces at the start and remove spaces at the end
